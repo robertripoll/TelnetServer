@@ -2,6 +2,7 @@ namespace TelnetServer
 {
     using System;
     using System.Collections.Generic;
+    using System.Linq;
     using System.Net;
     using System.Net.Sockets;
     using System.Text;
@@ -19,15 +20,13 @@ namespace TelnetServer
         public IPEndPoint remoteEndPoint;
         public DateTime connectedAt;
         public EClientState clientState;
-        public int currentLevel;
         public string commandIssued = string.Empty;
 
-        public Client(IPEndPoint _remoteEndPoint, DateTime _connectedAt, EClientState _clientState, int _currentLevel)
+        public Client(IPEndPoint _remoteEndPoint, DateTime _connectedAt, EClientState _clientState)
         {
             this.remoteEndPoint = _remoteEndPoint;
             this.connectedAt = _connectedAt;
             this.clientState = _clientState;
-            this.currentLevel = _currentLevel;
         }
     }
 
@@ -35,8 +34,9 @@ namespace TelnetServer
     {
         private static Socket serverSocket;
         private static byte[] data = new byte[dataSize];
+        private static bool newClients = true;
         private const int dataSize = 1024;
-        private static Dictionary<Socket, Client> clientList = new Dictionary<Socket,Client>();
+        private static Dictionary<Socket, Client> clientList = new Dictionary<Socket, Client>();
         
         static void Main(string[] args)
         {
@@ -54,19 +54,77 @@ namespace TelnetServer
         {
             while (true)
             {
-                Thread.Sleep(100);
+                string Input = Console.ReadLine();
+
+                if (Input == "clients")
+                {
+                    if (clientList.Count == 0) continue;
+                    int clientNumber = 0;
+                    foreach (KeyValuePair<Socket, Client> client in clientList)
+                    {
+                        Client currentClient = client.Value;
+                        clientNumber++;
+                        Console.WriteLine(string.Format("Client #{0} (From: {1}:{2}, ECurrentState: {3}, Connection time: {4})", clientNumber,
+                            currentClient.remoteEndPoint.Address.ToString(), currentClient.remoteEndPoint.Port, currentClient.clientState, currentClient.connectedAt));
+                    }
+                }
+
+                if (Input.StartsWith("kill"))
+                {
+                    string[] _Input = Input.Split(' ');
+                    int clientID = 0;
+                    try
+                    {
+                        if (Int32.TryParse(_Input[1], out clientID) && clientID >= clientList.Keys.Count)
+                        {
+                            int currentClient = 0;
+                            foreach (Socket currentSocket in clientList.Keys.ToArray())
+                            {
+                                currentClient++;
+                                if (currentClient == clientID)
+                                {
+                                    currentSocket.Shutdown(SocketShutdown.Both);
+                                    currentSocket.Close();
+                                    clientList.Remove(currentSocket);
+                                    Console.WriteLine("Client has been disconnected and cleared up.");
+                                }
+                            }
+                        }
+                        else { Console.WriteLine("Could not kick client: invalid client number specified."); }
+                    }
+                    catch { Console.WriteLine("Could not kick client: invalid client number specified."); }
+                }
+
+                if (Input == "killall")
+                {
+                    int deletedClients = 0;
+                    foreach (Socket currentSocket in clientList.Keys.ToArray())
+                    {
+                        currentSocket.Shutdown(SocketShutdown.Both);
+                        currentSocket.Close();
+                        clientList.Remove(currentSocket);
+                        deletedClients++;
+                    }
+
+                    Console.WriteLine("{0} clients have been disconnected and cleared up.", deletedClients);
+                }
+
+                if (Input == "lock") { newClients = false; Console.WriteLine("Refusing new connections."); }
+                if (Input == "unlock") { newClients = true; Console.WriteLine("Accepting new connections."); }
             }
         }
 
         private static void AcceptConnection(IAsyncResult result)
         {
+            if (!newClients) return;
             Socket oldSocket = (Socket)result.AsyncState;
             Socket newSocket = oldSocket.EndAccept(result);
-            Client client = new Client((IPEndPoint)newSocket.RemoteEndPoint, DateTime.Now, EClientState.NotLogged, 1);
+            Client client = new Client((IPEndPoint)newSocket.RemoteEndPoint, DateTime.Now, EClientState.NotLogged);
             clientList.Add(newSocket, client);
             Console.WriteLine("Client connected. (From: " + string.Format("{0}:{1}", client.remoteEndPoint.Address.ToString(), client.remoteEndPoint.Port) + ")");
             string output = "-- TELNET TEST SERVER --\n\r\n\r";
-            output += "Write a dot [.] and press ENTER to continue.\n\r";
+            output += "Please input your password:\n\r";
+            client.clientState = EClientState.Logging;
             byte[] message = Encoding.ASCII.GetBytes(output);
             newSocket.BeginSend(message, 0, message.Length, SocketFlags.None, new AsyncCallback(SendData), newSocket);
             serverSocket.BeginAccept(new AsyncCallback(AcceptConnection), serverSocket);
@@ -155,50 +213,46 @@ namespace TelnetServer
 
         private static string HandleCommand(Socket clientSocket, string Input)
         {
-            string Output = "";
+            string Output = "-- TELNET TEST SERVER --\n\r\n\r";
+            byte[] dataInput = Encoding.ASCII.GetBytes(Input);
             Client client;
             clientList.TryGetValue(clientSocket, out client);
-            if (client.clientState == EClientState.NotLogged)
+            /*if (client.clientState == EClientState.NotLogged)
             {
                 Console.WriteLine("Client not logged in, marking login operation in progress...");
                 client.clientState = EClientState.Logging;
-                Output = "-- TELNET TEST SERVER --\n\r\n\r";
                 Output += "Please input your password:\n\r";
-                return Output;
-            }
+            }*/
             if (client.clientState == EClientState.Logging)
             {
                 if (Input == "1337")
                 {
                     Console.WriteLine("Client has logged in (correct password), marking as logged...");
                     client.clientState = EClientState.LoggedIn;
-                    Output = "-- TELNET TEST SERVER --\n\r\n\r";
-                    Output += "Logged successfully. Please enter a valid command:\n\r";
+                    Output += "Logged successfully.\n\r";
                 }
                 else
                 {
                     Console.WriteLine("Client login failed (incorrect password).");
-                    Output = "-- TELNET TEST SERVER --\n\r\n\r";
-                    Output += "Please input your password:\n\r";
+                    Output += "Incorrect password. Please input your password: ";
                 }
-                return Output;
             }
             if (client.clientState == EClientState.LoggedIn)
             {
                 if (Input == "test")
                 {
-                    Output = "-- TELNET TEST SERVER --\n\r\n\r";
                     Output += "Hello there.\n\r";
+                }
+                if (Input == "getrekt")
+                {
                     return Output;
                 }
                 else
                 {
-                    Output = "-- TELNET TEST SERVER --\n\r\n\r";
                     Output += "Please enter a valid command:\n\r";
-                    return Output;
                 }
             }
-            else { return Output; }
+            return Output;
         }
     }
 }
