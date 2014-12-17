@@ -1,0 +1,204 @@
+namespace TelnetServer
+{
+    using System;
+    using System.Collections.Generic;
+    using System.Net;
+    using System.Net.Sockets;
+    using System.Text;
+    using System.Threading;
+
+    public enum EClientState
+    {
+        NotLogged = 0,
+        Logging = 1,
+        LoggedIn = 2
+    }
+
+    public class Client
+    {
+        public IPEndPoint remoteEndPoint;
+        public DateTime connectedAt;
+        public EClientState clientState;
+        public int currentLevel;
+        public string commandIssued = string.Empty;
+
+        public Client(IPEndPoint _remoteEndPoint, DateTime _connectedAt, EClientState _clientState, int _currentLevel)
+        {
+            this.remoteEndPoint = _remoteEndPoint;
+            this.connectedAt = _connectedAt;
+            this.clientState = _clientState;
+            this.currentLevel = _currentLevel;
+        }
+    }
+
+    class Program
+    {
+        private static Socket serverSocket;
+        private static byte[] data = new byte[dataSize];
+        private const int dataSize = 1024;
+        private static Dictionary<Socket, Client> clientList = new Dictionary<Socket,Client>();
+        
+        static void Main(string[] args)
+        {
+            Console.WriteLine("Starting...");
+            new Thread(new ThreadStart(backgroundThread)) { IsBackground = false}.Start();
+            serverSocket = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
+            IPEndPoint endPoint = new IPEndPoint(IPAddress.Any, 23);
+            serverSocket.Bind(endPoint);
+            serverSocket.Listen(0);
+            serverSocket.BeginAccept(new AsyncCallback(AcceptConnection), serverSocket);
+            Console.WriteLine("Server socket listening to upcoming connections.");
+        }
+
+        private static void backgroundThread()
+        {
+            while (true)
+            {
+                Thread.Sleep(100);
+            }
+        }
+
+        private static void AcceptConnection(IAsyncResult result)
+        {
+            Socket oldSocket = (Socket)result.AsyncState;
+            Socket newSocket = oldSocket.EndAccept(result);
+            Client client = new Client((IPEndPoint)newSocket.RemoteEndPoint, DateTime.Now, EClientState.NotLogged, 1);
+            clientList.Add(newSocket, client);
+            Console.WriteLine("Client connected. (From: " + string.Format("{0}:{1}", client.remoteEndPoint.Address.ToString(), client.remoteEndPoint.Port) + ")");
+            string output = "-- TELNET TEST SERVER --\n\r\n\r";
+            output += "Write a dot [.] and press ENTER to continue.\n\r";
+            byte[] message = Encoding.ASCII.GetBytes(output);
+            newSocket.BeginSend(message, 0, message.Length, SocketFlags.None, new AsyncCallback(SendData), newSocket);
+            serverSocket.BeginAccept(new AsyncCallback(AcceptConnection), serverSocket);
+        }
+
+        private static void SendData(IAsyncResult result)
+        {
+            try
+            {
+                Socket clientSocket = (Socket)result.AsyncState;
+                clientSocket.EndSend(result);
+                clientSocket.BeginReceive(data, 0, dataSize, SocketFlags.None, new AsyncCallback(ReceiveData), clientSocket);
+            }
+            catch { }
+        }
+
+        private static void ReceiveData(IAsyncResult result)
+        {
+            try
+            {
+                Socket clientSocket = (Socket)result.AsyncState;
+                Client client;
+                clientList.TryGetValue(clientSocket, out client);
+                int received = clientSocket.EndReceive(result);
+                if (received == 0)
+                {
+                    clientSocket.Close();
+                    clientList.Remove(clientSocket);
+                    serverSocket.BeginAccept(new AsyncCallback(AcceptConnection), serverSocket);
+                    Console.WriteLine("Client disconnected. (From: " + string.Format("{0}:{1}", client.remoteEndPoint.Address.ToString(), client.remoteEndPoint.Port) + ")");
+                    return;
+                }
+
+                Console.WriteLine("Received '{0}' (From: {1}:{2})", BitConverter.ToString(data, 0, received), client.remoteEndPoint.Address.ToString(), client.remoteEndPoint.Port);
+
+                // 0x2E & 0X0D => return/intro
+                if (data[0] == 0x2E && data[1] == 0x0D && client.commandIssued.Length == 0)
+                {
+                    string currentCommand = client.commandIssued;
+                    Console.WriteLine(string.Format("Received '{0}' while EClientStatus '{1}' (From: {2}:{3})", currentCommand, client.clientState.ToString(), client.remoteEndPoint.Address.ToString(), client.remoteEndPoint.Port));
+                    client.commandIssued = "";
+                    byte[] message = Encoding.ASCII.GetBytes("\u001B[1J\u001B[H" + HandleCommand(clientSocket, currentCommand));
+                    clientSocket.BeginSend(message, 0, message.Length, SocketFlags.None, new AsyncCallback(SendData), clientSocket);
+                }
+
+                else if (data[0] == 0x0D && data[1] == 0x0A)
+                {
+                    string currentCommand = client.commandIssued;
+                    Console.WriteLine(string.Format("Received '{0}' (From: {1}:{2}", currentCommand, client.remoteEndPoint.Address.ToString(), client.remoteEndPoint.Port));
+                    client.commandIssued = "";
+                    byte[] message = Encoding.ASCII.GetBytes("\u001B[1J\u001B[H" + HandleCommand(clientSocket, currentCommand));
+                    clientSocket.BeginSend(message, 0, message.Length, SocketFlags.None, new AsyncCallback(SendData), clientSocket);
+                }
+
+                else
+                {
+                    // 0x08 => remove character
+                    if (data[0] == 0x08)
+                    {
+                        if (client.commandIssued.Length > 0)
+                        {
+                            client.commandIssued = client.commandIssued.Substring(0, client.commandIssued.Length - 1);
+                            byte[] message = Encoding.ASCII.GetBytes("\u0020\u0008");
+                            clientSocket.BeginSend(message, 0, message.Length, SocketFlags.None, new AsyncCallback(SendData), clientSocket);
+                        }
+                        else
+                        {
+                            clientSocket.BeginReceive(data, 0, dataSize, SocketFlags.None, new AsyncCallback(ReceiveData), clientSocket);
+                        }
+                    }
+                    // 0x7F => delete character
+                    else if (data[0] == 0x7F)
+                    {
+                        clientSocket.BeginReceive(data, 0, dataSize, SocketFlags.None, new AsyncCallback(ReceiveData), clientSocket);
+                    }
+                    else
+                    {
+                        string currentCommand = client.commandIssued;
+                        client.commandIssued += Encoding.ASCII.GetString(data, 0, received);
+                        clientSocket.BeginReceive(data, 0, dataSize, SocketFlags.None, new AsyncCallback(ReceiveData), clientSocket);
+                    }
+                }
+            }
+            catch { }
+        }
+
+        private static string HandleCommand(Socket clientSocket, string Input)
+        {
+            string Output = "";
+            Client client;
+            clientList.TryGetValue(clientSocket, out client);
+            if (client.clientState == EClientState.NotLogged)
+            {
+                Console.WriteLine("Client not logged in, marking login operation in progress...");
+                client.clientState = EClientState.Logging;
+                Output = "-- TELNET TEST SERVER --\n\r\n\r";
+                Output += "Please input your password:\n\r";
+                return Output;
+            }
+            if (client.clientState == EClientState.Logging)
+            {
+                if (Input == "1337")
+                {
+                    Console.WriteLine("Client has logged in (correct password), marking as logged...");
+                    client.clientState = EClientState.LoggedIn;
+                    Output = "-- TELNET TEST SERVER --\n\r\n\r";
+                    Output += "Logged successfully. Please enter a valid command:\n\r";
+                }
+                else
+                {
+                    Console.WriteLine("Client login failed (incorrect password).");
+                    Output = "-- TELNET TEST SERVER --\n\r\n\r";
+                    Output += "Please input your password:\n\r";
+                }
+                return Output;
+            }
+            if (client.clientState == EClientState.LoggedIn)
+            {
+                if (Input == "test")
+                {
+                    Output = "-- TELNET TEST SERVER --\n\r\n\r";
+                    Output += "Hello there.\n\r";
+                    return Output;
+                }
+                else
+                {
+                    Output = "-- TELNET TEST SERVER --\n\r\n\r";
+                    Output += "Please enter a valid command:\n\r";
+                    return Output;
+                }
+            }
+            else { return Output; }
+        }
+    }
+}
