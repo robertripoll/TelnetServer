@@ -197,15 +197,8 @@ namespace TelnetServer
         {
             Client c;
 
-            try
-            {
-                clients.TryGetValue(clientSocket, out c);
-            }
-
-            catch
-            {
+            if (!clients.TryGetValue(clientSocket, out c))
                 c = null;
-            }
 
             return c;
         }
