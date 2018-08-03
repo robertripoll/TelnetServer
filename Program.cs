@@ -18,10 +18,15 @@ namespace TelnetServer
 
             Console.WriteLine("SERVER STARTED: " + DateTime.Now);
 
+            char read = Console.ReadKey(true).KeyChar;
+
             do
             {
-                ; // nothing really
-            } while (Console.ReadKey(true).KeyChar != 'q');
+                if (read == 'b')
+                {
+                    s.sendMessageToAll(Console.ReadLine());
+                }
+            } while ((read = Console.ReadKey(true).KeyChar) != 'q');
 
             s.stop();
         }
@@ -30,7 +35,7 @@ namespace TelnetServer
         {
             Console.WriteLine("CONNECTED: " + c);
 
-            s.sendMessageToClient(c, "Telnet Server\r\nLogin: ");
+            s.sendMessageToClient(c, "Telnet Server" + Server.END_LINE + "Login: ");
         }
 
         private static void clientDisconnected(Client c)
@@ -45,37 +50,59 @@ namespace TelnetServer
 
         private static void messageReceived(Client c, string message)
         {
+            if (c.getCurrentStatus() != EClientStatus.LoggedIn)
+            {
+                handleLogin(c, message);
+                return;
+            }
+
             Console.WriteLine("MESSAGE: " + message);
 
-            if (message != "kickmyass")
+            if (message == "kickmyass" || message == "logout" ||
+                message == "exit")
             {
-                EClientStatus status = c.getCurrentStatus();
+                s.kickClient(c);
+                s.sendMessageToClient(c, Server.END_LINE + Server.CURSOR);
+            }
 
-                if (status == EClientStatus.Guest)
-                {
-                    if (message == "root")
-                    {
-                        s.sendMessageToClient(c, "\r\nPassword: ");
-                        c.setStatus(EClientStatus.Authenticating);
-                    }
-                }
-
-                else if (status == EClientStatus.Authenticating)
-                {
-                    if (message == "r00t")
-                    {
-                        s.clearClientScreen(c);
-                        s.sendMessageToClient(c, "Successfully authenticated.\r\n > ");
-                        c.setStatus(EClientStatus.LoggedIn);
-                    }
-                }
-
-                else
-                    s.sendMessageToClient(c, "\r\n > ");
+            else if (message == "clear")
+            {
+                s.clearClientScreen(c);
+                s.sendMessageToClient(c, Server.CURSOR);
             }
 
             else
-                s.kickClient(c);
+                s.sendMessageToClient(c, Server.END_LINE + Server.CURSOR);
+        }
+
+        private static void handleLogin(Client c, string message)
+        {
+            EClientStatus status = c.getCurrentStatus();
+
+            if (status == EClientStatus.Guest)
+            {
+                if (message == "root")
+                {
+                    s.sendMessageToClient(c, Server.END_LINE + "Password: ");
+                    c.setStatus(EClientStatus.Authenticating);
+                }
+
+                else
+                    s.kickClient(c);
+            }
+
+            else if (status == EClientStatus.Authenticating)
+            {
+                if (message == "r00t")
+                {
+                    s.clearClientScreen(c);
+                    s.sendMessageToClient(c, "Successfully authenticated." + Server.END_LINE + Server.CURSOR);
+                    c.setStatus(EClientStatus.LoggedIn);
+                }
+
+                else
+                    s.kickClient(c);
+            }
         }
     }
 }

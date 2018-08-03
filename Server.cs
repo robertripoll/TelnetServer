@@ -10,13 +10,14 @@ namespace TelnetServer
     public class Server
     {
         /// <summary>
-        /// End of line constant.
-        /// </summary>
-        public const string END_LINE = "\r\n";
-        /// <summary>
         /// Telnet's default port.
         /// </summary>
         private const int PORT = 23;
+        /// <summary>
+        /// End of line constant.
+        /// </summary>
+        public const string END_LINE = "\r\n";
+        public const string CURSOR = " > ";
 
         /// <summary>
         /// Server's main socket.
@@ -182,8 +183,21 @@ namespace TelnetServer
         {
             foreach (Socket s in clients.Keys)
             {
-                try { sendMessageToSocket(s, message); }
-                catch { clients.Remove(s); }
+                try
+                {
+                    Client c = clients[s];
+
+                    if (c.getCurrentStatus() == EClientStatus.LoggedIn)
+                    {
+                        sendMessageToSocket(s, END_LINE + message + END_LINE + CURSOR);
+                        c.resetReceivedData();
+                    }
+                }
+
+                catch
+                {
+                    clients.Remove(s);
+                }
             }
         }
 
@@ -261,13 +275,14 @@ namespace TelnetServer
                     Client client = new Client(clientID, (IPEndPoint)newSocket.RemoteEndPoint);
                     clients.Add(newSocket, client);
 
-                    // Do Echo
-                    // Do Remote Flow Control
-                    // Will Echo
-                    // Will Suppress Go Ahead
                     sendBytesToSocket(
                         newSocket,
-                        new byte[] { 0xff, 0xfd, 0x01, 0xff, 0xfd, 0x21, 0xff, 0xfb, 0x01, 0xff, 0xfb, 0x03 }
+                        new byte[] {
+                            0xff, 0xfd, 0x01,   // Do Echo
+                            0xff, 0xfd, 0x21,   // Do Remote Flow Control
+                            0xff, 0xfb, 0x01,   // Will Echo
+                            0xff, 0xfb, 0x03    // Will Supress Go Ahead
+                        }
                     );
 
                     client.resetReceivedData();
